@@ -25,12 +25,19 @@ from rag.nlp import rag_tokenizer
 from deepdoc.parser import PdfParser, PptParser, PlainParser
 from PyPDF2 import PdfReader as pdf2_read
 
+import tempfile
+from pptx import Presentation
+import logging
+import os
+
 
 class Ppt(PptParser):
     def __call__(self, fnm, from_page, to_page, callback=None):
         txts = super().__call__(fnm, from_page, to_page)
 
         callback(0.5, "Text extraction finished.")
+        '''
+        # adapt x86 linux
         import aspose.slides as slides
         import aspose.pydrawing as drawing
         imgs = []
@@ -46,6 +53,61 @@ class Ppt(PptParser):
         callback(0.9, "Image extraction finished")
         self.is_english = is_english(txts)
         return [(txts[i], imgs[i]) for i in range(len(txts))]
+        '''
+        #adapt arm linux
+        imgs = []
+        ppt_temp_path = None
+        pdf_temp_path = None
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as ppt_temp:
+                ppt_temp.write(fnm)
+                ppt_temp_path = ppt_temp.name
+
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as pdf_temp:
+                pdf_temp_path = pdf_temp.name
+
+            command = "env LD_LIBRARY_PATH=/usr/lib/libreoffice/program:$LD_LIBRARY_PATH libreoffice --headless --convert-to pdf --outdir {} {}".format(
+                    os.path.dirname(pdf_temp_path), ppt_temp_path
+                )
+            ret = os.system(command)
+            if ret != 0:
+                logging.info("Command execution failed, return code:", ret)
+
+            base_name = os.path.splitext(os.path.basename(ppt_temp_path))[0]
+            actual_pdf_path = os.path.join(
+                os.path.dirname(pdf_temp_path),
+                f"{base_name}.pdf"
+            )
+            import fitz
+            with fitz.open(actual_pdf_path) as pdf_doc:
+                total_pages = len(pdf_doc)
+                if total_pages < to_page:
+                    to_page = total_pages
+
+                for page_num in range(from_page, to_page):
+                    page = pdf_doc.load_page(page_num)
+                    matrix = fitz.Matrix(2.0, 2.0)
+                    pix = page.get_pixmap(matrix=matrix, alpha=False)
+                    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                    imgs.append(img)
+
+            if len(imgs) != len(txts):
+                err_msg = f"Text page count ({len(txts)}) does not match image page count ({len(imgs)})"
+                logging.error(err_msg)
+
+            logging.info(imgs)
+            callback(0.9, "Image extraction finished")
+            self.is_english = is_english(txts)
+            return [(txts[i], imgs[i]) for i in range(len(txts))]
+
+        finally:
+            for path in [ppt_temp_path, pdf_temp_path, actual_pdf_path]:
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except Exception as e:
+                        logging.warning(f"Failed to clean up temporary files: {path}: {str(e)}")
 
 
 class Pdf(PdfParser):
