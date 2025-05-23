@@ -17,8 +17,16 @@ import os
 from datetime import date
 from enum import IntEnum, Enum
 import json
+
+import rag.utils
 import rag.utils.es_conn
 import rag.utils.infinity_conn
+import rag.utils.opengauss_conn
+from api.constants import RAG_FLOW_SERVICE_NAME
+from api.utils import decrypt_database_config, get_base_config
+from api.utils.file_utils import get_project_base_directory
+from graphrag import search as kg_search
+from rag.nlp import search
 
 import rag.utils
 from rag.nlp import search
@@ -137,6 +145,8 @@ def init_settings():
         docStoreConn = rag.utils.es_conn.ESConnection()
     elif lower_case_doc_engine == "infinity":
         docStoreConn = rag.utils.infinity_conn.InfinityConnection()
+    elif lower_case_doc_engine == "opengauss":
+        docStoreConn = rag.utils.opengauss_conn.OpenGaussConnection()
     else:
         raise Exception(f"Not supported doc engine: {DOC_ENGINE}")
 

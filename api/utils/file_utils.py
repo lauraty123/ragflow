@@ -21,6 +21,12 @@ import sys
 import threading
 from io import BytesIO
 
+import tempfile
+from pptx import Presentation
+import logging
+import os
+import fitz
+
 import pdfplumber
 from PIL import Image
 from cachetools import LRUCache, cached
@@ -206,6 +212,8 @@ def thumbnail_img(filename, blob):
         return buffered.getvalue()
 
     elif re.match(r".*\.(ppt|pptx)$", filename):
+        '''
+        # adapt x86 linux
         import aspose.slides as slides
         import aspose.pydrawing as drawing
         try:
@@ -226,6 +234,52 @@ def thumbnail_img(filename, blob):
                 return img
         except Exception:
             pass
+        '''
+        #adapt arm linux
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as ppt_temp:
+                ppt_temp.write(blob)
+                ppt_temp_path = ppt_temp.name
+
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as pdf_temp:
+                pdf_temp_path = pdf_temp.name
+
+            command = "env LD_LIBRARY_PATH=/usr/lib/libreoffice/program:$LD_LIBRARY_PATH libreoffice --headless --convert-to pdf --outdir {} {}".format(
+                    os.path.dirname(pdf_temp_path), ppt_temp_path
+                )
+            ret = os.system(command)
+            if ret != 0:
+                logging.info("Command execution failed, return code:", ret)
+            scale = 0.03
+            img_data = None
+            base_name = os.path.splitext(os.path.basename(ppt_temp_path))[0]
+            actual_pdf_path = os.path.join(
+                os.path.dirname(pdf_temp_path),
+                f"{base_name}.pdf"
+            )
+            with fitz.open(actual_pdf_path) as pdf_doc:
+                for _ in range(10): 
+                    page = pdf_doc.load_page(0)
+                    matrix = fitz.Matrix(scale, scale)
+                    pix = page.get_pixmap(matrix=matrix, alpha=False, colorspace=fitz.csRGB)
+
+                    buffered = BytesIO()
+                    Image.frombytes("RGB", [pix.width, pix.height], pix.samples).save(
+                        buffered, format="PNG", optimize=True)
+
+                    if len(buffered.getvalue()) >= 64000:
+                        scale /= 2.0  
+                    else:
+                        img_data = buffered.getvalue()
+                        break
+            return img_data if img_data else None
+        finally:
+            for path in [ppt_temp_path, pdf_temp_path, actual_pdf_path]:
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except Exception as e:
+                        logging.warning(f"Failed to clean up temporary files: {path}: {str(e)}")
     return None
 
 
